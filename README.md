@@ -1,6 +1,8 @@
 # TwitchCommander
 
-## Installation Instructions
+## 		╔═════════════════════════════╗
+## 		║  Installation Instructions  ║
+## 		╚═════════════════════════════╝
 
 Step 1: Download Node.js from the following link:  
 https://nodejs.org/en/download/current/
@@ -13,7 +15,9 @@ Step 4: Run `start.bat`.
 
 When done, simply close the command prompt.
 
-## Warning
+## 		╔═════════════════╗
+## 		║ *!* WARNING *!* ║
+## 		╚═════════════════╝
 
 TwitchCommander now checks whether the configured target process is
 running before sending commands. If the target game is not running,
@@ -27,29 +31,33 @@ sent to the wrong place.
 Do not leave the bot running unattended unless you are comfortable
 with that risk.
 
-## Author's Notes
+## 		╔══════════════════╗
+## 		║  Author's Notes  ║
+## 		╚══════════════════╝
 
 I, Liliana Kilroy, am giving this code freely to anyone who wishes
 to use it. It is being provided as-is and any future updates will
 be available through my personal GitHub repository here:  
-https://sites.google.com/view/cerberus-game-labs/twitchcommander
+		https://github.com/cerberusgamelabs/TwitchCommander
 
 If for whatever reason you cannot access the repo, please feel free
 to reach out to me via any of the following methods:
 
-Discord: Liliana Xolkiyr#3653  
-Email: yggdrassoftgaming@gmail.com
+		<u>Discord</u>: yggdrassoftgaming [Liliana Xolkiyr]  
+		<u>Email</u>: yggdrassoftgaming@gmail.com
 
 If you like what I've given here, please feel free to subscribe to
 my channel on Twitch:  
-https://twitch.tv/yggdrassoftgaming
+		https://twitch.tv/yggdrassoftgaming
 
 Or you may buy me a coffee at Ko-Fi:  
-https://ko-fi.com/yggdrassoftgaming
+		https://ko-fi.com/yggdrassoftgaming
 
 I appreciate the thought and the effort of everyone involved.
 
-## Software End User License Agreement
+##		╔═══════════════════════════════════════╗
+## 		║  Software End User License Agreement  ║
+## 		╚═══════════════════════════════════════╝
 
 This license agreement ("Agreement") is a legal agreement between
 you and Cerberus Game Labs for the software TwitchCommander. By
@@ -58,52 +66,52 @@ Agreement.
 
 ### 1. Proprietary Rights
 
-The software and all copyrights, patents, trade secrets,
-trademarks, and other proprietary rights associated with
-it are and shall remain the exclusive property of Cerberus
-Game Labs. You shall not reverse engineer, decompile, or
-disassemble the software, except and only to the extent
-that such activity is expressly permitted by applicable
-law notwithstanding this limitation.
+		The software and all copyrights, patents, trade secrets,
+		trademarks, and other proprietary rights associated with
+		it are and shall remain the exclusive property of Cerberus
+		Game Labs. You shall not reverse engineer, decompile, or
+		disassemble the software, except and only to the extent
+		that such activity is expressly permitted by applicable
+		law notwithstanding this limitation.
 
 ### 2. Confidentiality
 
-You shall maintain the confidentiality of the software,
-using at least the same degree of care as you use to
-protect your own confidential information of similar
-importance, but in no event less than reasonable care.
+		You shall maintain the confidentiality of the software,
+		using at least the same degree of care as you use to
+		protect your own confidential information of similar
+		importance, but in no event less than reasonable care.
 
 ### 3. Exclusions
 
-Any node modules used within the software and owned by
-a third party are exempt from this Agreement and not
-subject to the proprietary rights granted to Cerberus
-Game Labs.
+		Any node modules used within the software and owned by
+		a third party are exempt from this Agreement and not
+		subject to the proprietary rights granted to Cerberus
+		Game Labs.
 
 ### 4. Disclaimer of Warranties
 
-The software is provided on an "AS IS" basis, without
-warranty of any kind, including without limitation the
-warranties of merchantability, fitness for a particular
-purpose, and non-infringement. The entire risk as to
-the quality and performance of the software is borne by
-you.
+		The software is provided on an "AS IS" basis, without
+		warranty of any kind, including without limitation the
+		warranties of merchantability, fitness for a particular
+		purpose, and non-infringement. The entire risk as to
+		the quality and performance of the software is borne by
+		you.
 
 ### 5. Limitation of Liability
 
-In no event shall Cerberus Game Labs be liable for any
-indirect, special, incidental, or consequential damages
-arising out of the use of or inability to use the
-software, even if Cerberus Game Labs has been advised
-of the possibility of such damages.
+		In no event shall Cerberus Game Labs be liable for any
+		indirect, special, incidental, or consequential damages
+		arising out of the use of or inability to use the
+		software, even if Cerberus Game Labs has been advised
+		of the possibility of such damages.
 
 ### 6. Termination
 
-This Agreement is effective until terminated. Cerberus
-Game Labs may terminate this Agreement if you breach
-any of its terms and conditions. Upon termination, you
-shall promptly destroy all copies of the software in
-your possession.
+		This Agreement is effective until terminated. Cerberus
+		Game Labs may terminate this Agreement if you breach
+		any of its terms and conditions. Upon termination, you
+		shall promptly destroy all copies of the software in
+		your possession.
 
 By using the software, you acknowledge that you have read this
 Agreement, understand it, and agree to be bound by its terms
