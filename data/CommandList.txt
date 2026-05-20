@@ -1,0 +1,12 @@
+Commands:
+  !up - Move the map up
+  !down - Move the map down
+  !left - Move the map left
+  !right - Move the map right
+  !zoomin - Zoom in on the map [Not working]
+  !zoomout - Zoom out on the map [Not working]
+  !random - Select a random Bibite
+  !stat - View the Stat Panel
+  !gene - View the Gene Panel
+  !bio - View the Bio Panel
+  !brain - View the Brain Panel

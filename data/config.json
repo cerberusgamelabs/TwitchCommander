@@ -1,0 +1,24 @@
+{
+  "username": "yggdrassoftgaming",
+  "channel": "#yggdrassoftgaming",
+  "oauth": "oauth:wbhgrfqnnhmqhkx199m2x57j5ordz5",
+  "tL": 15,
+  "trigger": "!",
+  "bitRewards": true,
+  "game": "bibites",
+  "gameWindow": {
+    "processName": "The Bibites.exe",
+    "windowTitle": "The Bibites"
+  },
+  "gameWindows": {
+    "bibites": {
+      "processName": "The Bibites.exe",
+      "windowTitle": "The Bibites"
+    }
+  },
+  "refreshToken": "4pyfrdsy41i0sh83ytqweo2ygk2z5dmcnw5jdu4kikwtg68rar",
+  "scopes": [
+    "chat:edit",
+    "chat:read"
+  ]
+}

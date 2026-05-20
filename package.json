@@ -1,0 +1,35 @@
+{
+  "name": "twitchcommander",
+  "version": "1.2.0",
+  "description": "Run things locally controlled by Twitch commands.",
+  "main": "app/electron/gui.js",
+  "scripts": {
+    "setup": "node install.js",
+    "test": "clear",
+    "start": "electron ."
+  },
+  "keywords": [
+    "twitch",
+    "chat"
+  ],
+  "author": "Liliana Kilroy (yggdrassoftgaming@gmail.com)",
+  "license": "ISC",
+  "dependencies": {
+    "@paymoapp/active-window": "^2.1.4",
+    "bindings": "^1.5.0",
+    "child_process": "^1.0.2",
+    "clipboardy": "^2.3.0",
+    "fs": "^0.0.1-security",
+    "jimp": "^0.22.10",
+    "node-abort-controller": "^3.1.1",
+    "obs-websocket-js": "^5.0.2",
+    "ps-list": "^8.1.1",
+    "tmi.js": "^1.8.5",
+    "twitch-js": "^2.0.0-beta.45",
+    "twurple": "^1.0.0",
+    "window": "^4.2.7"
+  },
+  "devDependencies": {
+    "electron": "^23.0.0"
+  }
+}
