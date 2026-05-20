@@ -1,8 +1,6 @@
 # TwitchCommander
 
-## 		╔═════════════════════════════╗
-## 		║  Installation Instructions  ║
-## 		╚═════════════════════════════╝
+## ╔═══════════════════════════╗<br>║ Installation Instructions ║<br>╚═══════════════════════════╝
 
 Step 1: Download Node.js from the following link:  
 https://nodejs.org/en/download/current/
@@ -15,9 +13,9 @@ Step 4: Run `start.bat`.
 
 When done, simply close the command prompt.
 
-## 		╔═════════════════╗
-## 		║ *!* WARNING *!* ║
-## 		╚═════════════════╝
+## ╔═════════════════╗
+## ║ *!* WARNING *!* ║
+## ╚═════════════════╝
 
 TwitchCommander now checks whether the configured target process is
 running before sending commands. If the target game is not running,
@@ -31,9 +29,9 @@ sent to the wrong place.
 Do not leave the bot running unattended unless you are comfortable
 with that risk.
 
-## 		╔══════════════════╗
-## 		║  Author's Notes  ║
-## 		╚══════════════════╝
+## ╔════════════════╗
+## ║ Author's Notes ║
+## ╚════════════════╝
 
 I, Liliana Kilroy, am giving this code freely to anyone who wishes
 to use it. It is being provided as-is and any future updates will
@@ -43,8 +41,8 @@ be available through my personal GitHub repository here:
 If for whatever reason you cannot access the repo, please feel free
 to reach out to me via any of the following methods:
 
-		<u>Discord</u>: yggdrassoftgaming [Liliana Xolkiyr]  
-		<u>Email</u>: yggdrassoftgaming@gmail.com
+		Discord: yggdrassoftgaming [Liliana Xolkiyr]  
+		Email: yggdrassoftgaming@gmail.com
 
 If you like what I've given here, please feel free to subscribe to
 my channel on Twitch:  
@@ -55,9 +53,9 @@ Or you may buy me a coffee at Ko-Fi:
 
 I appreciate the thought and the effort of everyone involved.
 
-##		╔═══════════════════════════════════════╗
-## 		║  Software End User License Agreement  ║
-## 		╚═══════════════════════════════════════╝
+## ╔═════════════════════════════════════╗
+## ║ Software End User License Agreement ║
+## ╚═════════════════════════════════════╝
 
 This license agreement ("Agreement") is a legal agreement between
 you and Cerberus Game Labs for the software TwitchCommander. By
