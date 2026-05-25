@@ -5,6 +5,7 @@
   "tL": 15,
   "trigger": "!",
   "bitRewards": true,
+  "recentCommandCount": 10,
   "game": "bibites",
   "gameWindow": {
     "processName": "The Bibites.exe",

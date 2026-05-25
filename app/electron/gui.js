@@ -4,6 +4,10 @@ const fs = require("fs");
 const path = require("path");
 const { appendStartupLog, getStartupLogPath } = require("../shared/startup-log");
 appendStartupLog("gui.js bootstrap start");
+const {
+  appendRecentCommand,
+  createRecentCommandEntry
+} = require("../shared/recent-command-feed");
 
 const { loadRuntime } = require("../shared/runtime-loader");
 
@@ -38,6 +42,7 @@ const dataRoot = ensureDataFiles(__dirname);
 const configPath = path.join(dataRoot, "config.json");
 const commandsPath = path.join(dataRoot, "commands.json");
 const commandListPath = path.join(dataRoot, "CommandList.txt");
+const recentCommandsPath = path.join(dataRoot, "RecentCommands.json");
 const rendererPath = path.join(projectRoot, "app", "renderer", "index.html");
 const botEntryPath = path.join(projectRoot, "app", "bot", "main.js");
 const TWITCH_CLIENT_ID = "chtjqkfyyjdyzxalzjnrfr5wg9c3b8";
@@ -625,6 +630,49 @@ ipcMain.handle("save-app-state", (event, payload) => {
   writeJson(configPath, payload.config);
   writeJson(commandsPath, payload.commands);
   return getAppState();
+});
+
+ipcMain.handle("test-recent-command", () => {
+  const config = readJson(configPath);
+  const sampleUsers = [
+    "AlphaViewer",
+    "IronCrafter",
+    "BitBard",
+    "MapGremlin",
+    "CopperGhost",
+    "TrainNerd",
+    "RocketRat",
+    "CircuitMoth"
+  ];
+  const sampleCommands = [
+    `${config.trigger || "!"}leftclick 12 88`,
+    `${config.trigger || "!"}handmine 52 41 1800`,
+    `${config.trigger || "!"}movenorth 1200`,
+    `${config.trigger || "!"}rotate`,
+    `${config.trigger || "!"}zoomin`,
+    `${config.trigger || "!"}rightclick 77 24`,
+    `${config.trigger || "!"}map`,
+    `${config.trigger || "!"}research`
+  ];
+  const sampleSources = ["vote", "bit", "immediate"];
+  const randomUser = sampleUsers[Math.floor(Math.random() * sampleUsers.length)];
+  const randomCommand = sampleCommands[Math.floor(Math.random() * sampleCommands.length)];
+  const randomSource = sampleSources[Math.floor(Math.random() * sampleSources.length)];
+  appendRecentCommand(
+    recentCommandsPath,
+    createRecentCommandEntry(
+      randomUser,
+      randomCommand,
+      randomSource
+    ),
+    Math.max(1, Math.min(50, Number(config.recentCommandCount) || 10))
+  );
+  return { ok: true };
+});
+
+ipcMain.handle("clear-recent-commands", () => {
+  fs.writeFileSync(recentCommandsPath, "[]", "utf8");
+  return { ok: true };
 });
 
 ipcMain.handle("update-command-list", () => {

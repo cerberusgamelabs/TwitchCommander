@@ -35,6 +35,9 @@
         oauthStatusPill: document.getElementById("oauth-status-pill"),
         trigger: document.getElementById("trigger"),
         voteLength: document.getElementById("vote-length"),
+        recentCommandCount: document.getElementById("recent-command-count"),
+        testRecentCommandButton: document.getElementById("test-recent-command-button"),
+        clearRecentCommandsButton: document.getElementById("clear-recent-commands-button"),
         activeGame: document.getElementById("active-game"),
         gameProcess: document.getElementById("game-process"),
         gameProcessSelect: document.getElementById("game-process-select"),
@@ -225,6 +228,7 @@
         dom.trigger.value = config.trigger || "!";
         dom.voteLength.value = config.tL || 15;
         dom.bitRewards.value = String(Boolean(config.bitRewards));
+        dom.recentCommandCount.value = config.recentCommandCount || 10;
 
         dom.activeGame.innerHTML = "";
         gameKeys.forEach((gameKey) => {
@@ -1057,6 +1061,7 @@
         state.config.trigger = dom.trigger.value || "!";
         state.config.tL = Number(dom.voteLength.value) || 15;
         state.config.bitRewards = dom.bitRewards.value === "true";
+        state.config.recentCommandCount = Math.max(1, Math.min(50, Number(dom.recentCommandCount.value) || 10));
         state.config.game = dom.activeGame.value || state.selectedGame || "";
         state.config.gameWindows = state.config.gameWindows || {};
         const displayDetails = getSelectedDisplayDetails(dom.gameDisplay);
@@ -1293,6 +1298,22 @@
       dom.oauthButton.addEventListener("click", () => {
         beginOAuthFlow().catch((error) => {
           setMessage(`Authorization failed: ${error.message}`, "warn");
+        });
+      });
+
+      dom.testRecentCommandButton.addEventListener("click", () => {
+        ipcRenderer.invoke("test-recent-command").then(() => {
+          setMessage("Added a test recent-command entry for the browser source.", "ok");
+        }).catch((error) => {
+          setMessage(`Recent command test failed: ${error.message}`, "warn");
+        });
+      });
+
+      dom.clearRecentCommandsButton.addEventListener("click", () => {
+        ipcRenderer.invoke("clear-recent-commands").then(() => {
+          setMessage("Cleared recent-command entries.", "ok");
+        }).catch((error) => {
+          setMessage(`Failed to clear recent commands: ${error.message}`, "warn");
         });
       });
 

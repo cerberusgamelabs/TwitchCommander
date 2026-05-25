@@ -1,6 +1,6 @@
 {
   "name": "twitchcommander",
-  "version": "1.3.0",
+  "version": "1.3.2",
   "description": "Run things locally controlled by Twitch commands.",
   "main": "app/electron/gui.js",
   "scripts": {

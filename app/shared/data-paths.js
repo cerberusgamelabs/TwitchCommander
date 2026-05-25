@@ -55,6 +55,7 @@ function ensureDataFiles(currentDir) {
   copyIfMissing(path.join(defaultDataDir, "config.json"), path.join(dataDir, "config.json"));
   copyIfMissing(path.join(defaultDataDir, "commands.json"), path.join(dataDir, "commands.json"));
   copyIfMissing(path.join(defaultDataDir, "CommandList.txt"), path.join(dataDir, "CommandList.txt"));
+  copyIfMissing(path.join(defaultDataDir, "RecentCommands.json"), path.join(dataDir, "RecentCommands.json"));
 
   return dataDir;
 }
