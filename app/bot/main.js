@@ -2,13 +2,21 @@
 const tmi = require('tmi.js');
 const fs = require("fs");
 const path = require("path");
-const { mouse, keyboard, Button, Key } = require("@nut-tree/nut-js");
+const { loadRuntime } = require("../shared/runtime-loader");
+const { mouse, keyboard, Button, Key } = loadRuntime("@nut-tree/nut-js");
+const { ensureDataFiles } = require("../shared/data-paths");
+const {
+	buildArgumentSuffix,
+	buildCommandUsage: buildUsageString,
+	hasArgumentPlaceholders,
+	getRequiredArgumentCount
+} = require("../shared/command-usage");
 const {
 	getTargetWindowStatus,
 	prepareTargetWindow,
 	restorePreviousWindow
 } = require("../shared/window-control");
-const dataDir = path.resolve(__dirname, "..", "..", "data");
+const dataDir = ensureDataFiles(__dirname);
 const configPath = path.join(dataDir, "config.json");
 const commandsPath = path.join(dataDir, "commands.json");
 const commandListPath = path.join(dataDir, "CommandList.txt");
@@ -45,6 +53,18 @@ for (const command in commands) {
 let timeoutId = null;
 let running = true;
 let lastWindowWarning = "";
+let activeAutomationSession = null;
+const heldKeys = new Set();
+const heldMouseButtons = new Set();
+let lifecycleOnlineAnnounced = false;
+let lifecycleShutdownStarted = false;
+
+class AutomationCancelledError extends Error {
+	constructor(message = "Automation cancelled.") {
+		super(message);
+		this.name = "AutomationCancelledError";
+	}
+}
 
 function hasUsableOAuth() {
 	return typeof config.oauth === "string" &&
@@ -55,6 +75,109 @@ function hasUsableOAuth() {
 function logOAuthHelp(reason) {
 	console.error(`Twitch OAuth problem: ${reason}`);
 	console.error("Open the GUI, click 'Get OAuth Token', sign in as the bot account, then paste the token in oauth:... format and save.");
+}
+
+async function safeSay(targetChannel, message) {
+	try {
+		await client.say(targetChannel, message);
+		return true;
+	} catch (_) {
+		return false;
+	}
+}
+
+async function announceShutdownAndExit(signal) {
+	if (lifecycleShutdownStarted) {
+		return;
+	}
+
+	lifecycleShutdownStarted = true;
+	try {
+		if (hasUsableOAuth() && config.channel) {
+			await safeSay(config.channel, "TwitchCommander is now offline.");
+			await sleep(250);
+		}
+	} finally {
+		try {
+			await client.disconnect();
+		} catch (_) {
+			// Ignore disconnect errors during shutdown.
+		}
+		process.exit(0);
+	}
+}
+
+function resetVoteState() {
+	for (const dict in voteDict[config.game]) {
+		voteDict[config.game][dict] = 0;
+	}
+}
+
+function clearPendingVoteTimeout() {
+	if (timeoutId !== null) {
+		clearTimeout(timeoutId);
+		timeoutId = null;
+	}
+}
+
+function createAutomationSession(contextLabel) {
+	const session = {
+		contextLabel,
+		cancelRequested: false
+	};
+	activeAutomationSession = session;
+	return session;
+}
+
+function ensureNotCancelled(session) {
+	if (session?.cancelRequested) {
+		throw new AutomationCancelledError(`Automation cancelled for ${session.contextLabel}.`);
+	}
+}
+
+async function cancellableSleep(ms, session) {
+	const numericDuration = Math.max(0, Number(ms) || 0);
+	const startedAt = Date.now();
+	while (Date.now() - startedAt < numericDuration) {
+		ensureNotCancelled(session);
+		const remaining = numericDuration - (Date.now() - startedAt);
+		await sleep(Math.min(50, remaining));
+	}
+	ensureNotCancelled(session);
+}
+
+async function releaseHeldInputs() {
+	for (const button of Array.from(heldMouseButtons)) {
+		try {
+			await mouse.releaseButton(button);
+		} catch (_) {
+			// Ignore release failures during cancellation cleanup.
+		} finally {
+			heldMouseButtons.delete(button);
+		}
+	}
+
+	for (const key of Array.from(heldKeys)) {
+		try {
+			await keyboard.releaseKey(key);
+		} catch (_) {
+			// Ignore release failures during cancellation cleanup.
+		} finally {
+			heldKeys.delete(key);
+		}
+	}
+}
+
+async function cancelActiveAutomation(reason = "cancel requested") {
+	const session = activeAutomationSession;
+	if (!session) {
+		return false;
+	}
+
+	session.cancelRequested = true;
+	await releaseHeldInputs();
+	console.log(`Automation cancellation requested: ${reason}.`);
+	return true;
 }
 
 updateCommandListFile(voteActions[config.game]);
@@ -105,6 +228,10 @@ client.on("connecting", (address, port) => {
 // Check that the bot has connected
 client.on("connected", (address, port) => {
 	console.log(`Connected to ${config.channel}.`);
+	if (!lifecycleOnlineAnnounced && hasUsableOAuth() && config.channel) {
+		lifecycleOnlineAnnounced = true;
+		safeSay(config.channel, "TwitchCommander is now online.");
+	}
 });
 
 // Check that the bot has joined your channel
@@ -124,6 +251,14 @@ client.on("reconnect", () => {
 	console.log(`Connection re-established.`);
 });
 
+process.once("SIGTERM", () => {
+	announceShutdownAndExit("SIGTERM");
+});
+
+process.once("SIGINT", () => {
+	announceShutdownAndExit("SIGINT");
+});
+
 // We shall pass the parameters which shall be required
 client.on('message', async (channel, tags, message, self) => {
 	// debug Code
@@ -131,7 +266,7 @@ client.on('message', async (channel, tags, message, self) => {
 	//console.log(voteDict[config.game]);
 	
 	// Convert message to lowercase
-	message = message.toLowerCase();
+	message = message.toLowerCase().trim();
 	
 	// Checks if User is either Streamer or Mod
 	let canCommand = false;
@@ -195,29 +330,89 @@ client.on('message', async (channel, tags, message, self) => {
 		console.log(`> ${tags.username} ran the botstatus command.`);
 		return;
 	}
+
+	if (message === (config.trigger + "cancel")) {
+		const cancelledRun = await cancelActiveAutomation(`chat cancel by ${tags.username}`);
+		clearPendingVoteTimeout();
+		resetVoteState();
+		client.say(channel, cancelledRun
+			? "TwitchCommander cancelled the current automation and cleared pending votes."
+			: "TwitchCommander cleared pending votes. No automation was currently running.");
+		console.log(`> ${tags.username} ran the cancel command.`);
+		return;
+	}
 	
 	// Checks if the bot should be running
 	if(!running) return;
 	
 	// Check for Help Command
-	if(message === (config.trigger + "help")){
-		console.log(`> ${tags.username} ran the help command.`);
+	if(message === (config.trigger + "help") || message.startsWith(config.trigger + "help ")){
+		const helpTarget = message.slice((config.trigger + "help").length).trim().toLowerCase();
+		console.log(`> ${tags.username} ran the help command${helpTarget ? ` for ${helpTarget}` : ""}.`);
+		if (helpTarget) {
+			const matchedCommand = findCommandByChatName(config.game, helpTarget);
+			if (!matchedCommand) {
+				client.say(channel, `No command named ${helpTarget} exists for ${config.game}.`);
+				return;
+			}
+
+			client.say(channel, `${config.trigger}${getCommandChatName(matchedCommand.commandKey, matchedCommand.details)} - ${matchedCommand.details.description}`);
+			client.say(channel, `Usage: ${buildCommandUsage(matchedCommand.commandKey, matchedCommand.details)}`);
+			if (normalizeBitCost(matchedCommand.details.bitCost) > 0) {
+				client.say(channel, `Bit Reward: cheer${normalizeBitCost(matchedCommand.details.bitCost)}${buildBitArgumentSuffix(matchedCommand.details)}`);
+			}
+			client.say(channel, `${hasArgumentPlaceholders(matchedCommand.details) ? "Runs immediately with chat-supplied arguments." : "Vote command unless separately used as a bit reward."}`);
+			return;
+		}
+
 		client.say(channel, 'Commands:');
 		// Itterate through the choices array to see if any of them match.
 		for (const action in voteActions[config.game]) {
 			let actions = voteActions[config.game][action];
 			client.say(channel, '  ' + config.trigger + actions.name + ' - ' + actions.description);
 		}
+		client.say(channel, '  ' + config.trigger + 'help <command> - Show description and usage for one command');
+		client.say(channel, '  ' + config.trigger + 'cancel - Cancel the current automation and clear pending votes');
 		if(config.bitRewards){
-			client.say(channel, 'Bit Rewards:');
-			client.say(channel, '  cheer200 name - Name a random bibite');
-			client.say(channel, '  cheer500      - Cause a random bibite to lay an egg');
-			client.say(channel, '  cheer1000     - Kill a random bibite');
+			const bitCommands = getBitCommandsForGame(config.game);
+			if (bitCommands.length) {
+				client.say(channel, 'Bit Rewards:');
+				for (const { details } of bitCommands) {
+					client.say(channel, `  cheer${details.bitCost}${buildBitArgumentSuffix(details)} - ${details.description}`);
+				}
+			}
 		}
+		return;
 	}
 	
-	// Checks if the bot sent the message
-	if (tags.username === config.username) return;
+	// Ignore echoed bot messages unless they are an actual broadcaster/mod command from the same account.
+	if (tags.username === config.username && !canCommand) return;
+
+	const parsedCommand = parseTriggeredCommandMessage(message);
+	if (parsedCommand) {
+		const matchedCommand = findCommandByChatName(config.game, parsedCommand.commandName);
+		if (matchedCommand) {
+			const requiredArgs = getRequiredArgumentCount(matchedCommand.details);
+			if (hasArgumentPlaceholders(matchedCommand.details)) {
+				if (parsedCommand.args.length < requiredArgs) {
+					console.log(`> ${tags.username} attempted ${parsedCommand.commandName} without enough arguments.`);
+					client.say(channel, `Usage: ${buildCommandUsage(matchedCommand.commandKey, matchedCommand.details)}`);
+					return;
+				}
+
+				console.log(`> ${tags.username} ran ${parsedCommand.commandName} ${parsedCommand.args.join(" ")}.`);
+				const completed = await runAutomation(
+					matchedCommand.details.actions,
+					`chat command ${parsedCommand.commandName}`,
+					parsedCommand.args
+				);
+				if (completed) {
+					client.say(channel, `Completed command: ${parsedCommand.commandName}`);
+				}
+				return;
+			}
+		}
+	}
 	
 	// We shall check the message to see if it contains a choice
 	// Then we will tally that choice and reset the timeout
@@ -225,10 +420,16 @@ client.on('message', async (channel, tags, message, self) => {
 
 	// Itterate through the choices array to see if any of them match.
 	for (const choice of voteChoices[config.game]) {
-		if (message === (config.trigger + choice)) {
-			console.log(`> ${tags.username} voted for ${choice}.`);
+		const commandDetails = voteActions[config.game][choice];
+		if (hasArgumentPlaceholders(commandDetails)) {
+			continue;
+		}
+
+		const chatName = getCommandChatName(choice, commandDetails);
+		if (message === (config.trigger + chatName)) {
+			console.log(`> ${tags.username} voted for ${chatName}.`);
 			vote = choice;
-			client.say(channel, `Vote of ${choice} has been accepted. Tally will happen in ${config.tL} seconds!`);
+			client.say(channel, `Vote of ${chatName} has been accepted. Tally will happen in ${config.tL} seconds!`);
 			break;
 		}
 	}
@@ -238,12 +439,12 @@ client.on('message', async (channel, tags, message, self) => {
 		voteDict[config.game][vote]++;
 		// Check if there was already a timeout set for announcing a winner
 		// Reset that timer if true
-		if(timeoutId === null){ clearTimeout(timeoutId); }
+		if(timeoutId !== null){ clearTimeout(timeoutId); }
 		timeoutId = setTimeout(takeAction, config.tL * 1000);
 	}
 });
 
-client.on("cheer", (channel, user, message) => {
+client.on("cheer", async (channel, user, message) => {
 	console.log(`> ${user.display-name} has cheered ${user.bits}.`);
 	// Checks if the bot should be running
 	if(!running) return;
@@ -251,46 +452,33 @@ client.on("cheer", (channel, user, message) => {
 	// Check if bit rewards are being accepted
 	if(!config.bitRewards) return;
 	
-	let args = removeCheermotes(message, channel);
-	
-	// Check for bit rewards then do
-	if(user.bits === 200){
-		console.log(`>>> ${user.display-name} triggered the rename bit reward, renaming a random Bibite ${args}.`);
-		runAutomation([
-			() => automation.keyTap("r"),
-			() => automation.moveMouse(40, 40),
-			() => automation.mouseClick(),
-			() => automation.moveMouse(435, 1080),
-			() => automation.mouseClick(),
-			() => automation.typeString(args),
-			() => automation.keyTap("enter")
-		], `${user.display-name} triggered the rename bit reward`);
+	const args = splitBitRewardArguments(removeCheermotes(message, channel));
+	const bitCommand = findBitCommandByCost(config.game, Number(user.bits));
+	if (!bitCommand) {
+		return;
 	}
-	if(user.bits === 500){
-		console.log(`>>> ${user.display-name} triggered one random Bibite to lay an egg.`);
-		runAutomation([
-			() => automation.keyTap("r"),
-			() => automation.moveMouse(40, 40),
-			() => automation.mouseClick(),
-			() => automation.moveMouse(510, 1270),
-			() => automation.mouseClick()
-		], `${user.display-name} triggered the egg bit reward`);
+
+	const requiredArgs = getRequiredArgumentCount(bitCommand.details);
+	if (args.length < requiredArgs) {
+		client.say(channel, `Bit reward usage: cheer${bitCommand.details.bitCost}${buildBitArgumentSuffix(bitCommand.details)}`);
+		console.log(`>>> ${user.display-name} cheered ${user.bits} without enough bit reward arguments.`);
+		return;
 	}
-	if(user.bits === 1000){
-		console.log(`>>> ${user.display-name} has killed a random Bibite.`);
-		runAutomation([
-			() => automation.keyTap("r"),
-			() => automation.moveMouse(40, 40),
-			() => automation.mouseClick(),
-			() => automation.moveMouse(510, 1250),
-			() => automation.mouseClick()
-		], `${user.display-name} triggered the kill bit reward`);
-		client.say(channel, `${user["display-name"]}... you monster... think of their family!`);
+
+	console.log(`>>> ${user.display-name} triggered bit reward ${bitCommand.commandKey} with ${user.bits} bits.`);
+	const completed = await runAutomation(
+		bitCommand.details.actions,
+		`${user.display-name} triggered bit reward ${bitCommand.commandKey}`,
+		args
+	);
+	if (completed) {
+		client.say(channel, `Completed bit reward: ${getCommandChatName(bitCommand.commandKey, bitCommand.details)}`);
 	}
 });
 
 // Actions to take once the vote has been counted
 async function takeAction(){
+	clearPendingVoteTimeout();
 	// Get the winning vote and check if there was a winning vote at all
 	client.say(config.channel,"Tallying the votes now!");
 	console.log(`> Tallying the votes!`);
@@ -304,13 +492,14 @@ async function takeAction(){
 		console.log("doing nothing");
 	} else {
 		let actions = voteActions[config.game][voteWinner].actions;
-		await runAutomation(actions, `vote command ${voteWinner}`);
+		const completed = await runAutomation(actions, `vote command ${voteWinner}`);
+		if (completed) {
+			client.say(config.channel, `Completed command: ${getCommandChatName(voteWinner, voteActions[config.game][voteWinner])}`);
+		}
 	}
 	
 	// Reset the vote Dictionary so that it doesn't start off biased towards the last winner
-	for (const dict in voteDict[config.game]) {
-		voteDict[config.game][dict] = 0;
-	}
+	resetVoteState();
 }
 
 async function removeCheermotes(message, channelId) {
@@ -320,10 +509,151 @@ async function removeCheermotes(message, channelId) {
   return message.replace(regex, '');
 }
 
+function splitBitRewardArguments(message) {
+	return String(message || "").trim().split(/\s+/).filter(Boolean);
+}
+
 function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function getCommandsForGame(gameKey) {
+	return commands[gameKey] || {};
+}
+
+function getCommandChatName(commandKey, commandDetails) {
+	return String(commandDetails?.name || commandKey || "").trim().toLowerCase();
+}
+
+function parseTriggeredCommandMessage(message) {
+	const trigger = String(config.trigger || "!").toLowerCase();
+	if (!message.startsWith(trigger)) {
+		return null;
+	}
+
+	const body = message.slice(trigger.length).trim();
+	if (!body) {
+		return null;
+	}
+
+	const parts = body.split(/\s+/).filter(Boolean);
+	return {
+		commandName: (parts[0] || "").toLowerCase(),
+		args: parts.slice(1)
+	};
+}
+
+function buildCommandUsage(commandKey, commandDetails) {
+	return buildUsageString(config.trigger, getCommandChatName(commandKey, commandDetails), commandDetails);
+}
+
+function buildBitArgumentSuffix(commandDetails) {
+	return buildArgumentSuffix(commandDetails);
+}
+
+function findCommandByChatName(gameKey, commandName) {
+	for (const [commandKey, commandDetails] of Object.entries(getCommandsForGame(gameKey))) {
+		if (getCommandChatName(commandKey, commandDetails) === commandName) {
+			return { commandKey, details: commandDetails };
+		}
+	}
+
+	return null;
+}
+
+function normalizeBitCost(value) {
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		return 0;
+	}
+
+	return Math.floor(parsed);
+}
+
+function getBitCommandsForGame(gameKey) {
+	return Object.entries(getCommandsForGame(gameKey))
+		.map(([commandKey, details]) => ({ commandKey, details }))
+		.filter(({ details }) => normalizeBitCost(details?.bitCost) > 0)
+		.sort((a, b) => normalizeBitCost(a.details.bitCost) - normalizeBitCost(b.details.bitCost));
+}
+
+function findBitCommandByCost(gameKey, bitCost) {
+	return getBitCommandsForGame(gameKey).find(({ details }) => normalizeBitCost(details.bitCost) === normalizeBitCost(bitCost)) || null;
+}
+
+function resolveTemplateValue(template, args) {
+	return String(template || "").replace(/\$([1-9]\d*)(\?([^|]+))?/g, (_, indexText, _fallbackGroup, fallbackValue) => {
+		const value = args[Number(indexText) - 1];
+		if (value === undefined || value === "") {
+			return fallbackValue === undefined ? "" : String(fallbackValue);
+		}
+		return String(value);
+	});
+}
+
+function resolveCoordinateToken(template, args, axisSize) {
+	const templateText = String(template || "").trim();
+	const resolvedText = resolveTemplateValue(templateText, args).trim();
+	const placeholderPattern = /^\$([1-9]\d*)(\?([^|]+))?$/;
+	const cameFromPlaceholder = placeholderPattern.test(templateText);
+	const clampPercent = (value) => Math.min(100, Math.max(0, value));
+
+	if (/^-?\d+(\.\d+)?px$/i.test(resolvedText)) {
+		return String(Math.round(parseFloat(resolvedText)));
+	}
+
+	if (/^-?\d+(\.\d+)?%$/i.test(resolvedText)) {
+		const percentValue = clampPercent(parseFloat(resolvedText));
+		const maxIndex = Math.max(0, Number(axisSize || 0) - 1);
+		return String(Math.round((percentValue / 100) * maxIndex));
+	}
+
+	if (cameFromPlaceholder && /^-?\d+(\.\d+)?$/.test(resolvedText)) {
+		const percentValue = clampPercent(Number(resolvedText));
+		const maxIndex = Math.max(0, Number(axisSize || 0) - 1);
+		return String(Math.round((percentValue / 100) * maxIndex));
+	}
+
+	return resolvedText;
+}
+
+function resolveCommandActions(actions, args, targetBounds = null) {
+	return (actions || []).map((action) => {
+		const parts = String(action || "").split("|");
+		switch (parts[0]) {
+			case "mouse":
+				parts[1] = resolveCoordinateToken(parts[1], args, targetBounds?.width);
+				parts[2] = resolveCoordinateToken(parts[2], args, targetBounds?.height);
+				parts[3] = resolveTemplateValue(parts[3], args);
+				parts[4] = resolveTemplateValue(parts[4], args);
+				parts[5] = resolveTemplateValue(parts[5], args);
+				parts[6] = resolveTemplateValue(parts[6], args);
+				return parts.join("|");
+			case "mousehold":
+				parts[1] = resolveCoordinateToken(parts[1], args, targetBounds?.width);
+				parts[2] = resolveCoordinateToken(parts[2], args, targetBounds?.height);
+				parts[3] = resolveTemplateValue(parts[3], args);
+				parts[4] = resolveTemplateValue(parts[4], args);
+				parts[5] = resolveTemplateValue(parts[5], args);
+				parts[6] = resolveTemplateValue(parts[6], args);
+				parts[7] = resolveTemplateValue(parts[7], args);
+				return parts.join("|");
+			case "mousedrag":
+				parts[1] = resolveCoordinateToken(parts[1], args, targetBounds?.width);
+				parts[2] = resolveCoordinateToken(parts[2], args, targetBounds?.height);
+				parts[3] = resolveCoordinateToken(parts[3], args, targetBounds?.width);
+				parts[4] = resolveCoordinateToken(parts[4], args, targetBounds?.height);
+				parts[5] = resolveTemplateValue(parts[5], args);
+				parts[6] = resolveTemplateValue(parts[6], args);
+				parts[7] = resolveTemplateValue(parts[7], args);
+				parts[8] = resolveTemplateValue(parts[8], args);
+				return parts.join("|");
+			default:
+				return resolveTemplateValue(action, args);
+		}
+	});
 }
 
 mouse.config.autoDelayMs = 0;
@@ -362,7 +692,11 @@ function toNutKey(key) {
 		pageup: Key.PageUp,
 		pagedown: Key.PageDown,
 		insert: Key.Insert,
-		space: Key.Space,
+	space: Key.Space,
+	shift: Key.LeftShift,
+	control: Key.LeftControl,
+	ctrl: Key.LeftControl,
+	alt: Key.LeftAlt,
 		"+": Key.Add,
 		"-": Key.Minus
 	};
@@ -399,6 +733,118 @@ const automation = {
 		await mouse.click(mappedButton);
 	},
 
+	async modifiedMouseClick(button = "left", modifiers = []) {
+		const mappedButton = toNutButton(button);
+		if (mappedButton === null) {
+			return;
+		}
+
+		const mappedModifiers = modifiers.map((modifier) => toNutKey(modifier)).filter((value) => value !== null);
+		for (const modifier of mappedModifiers) {
+			heldKeys.add(modifier);
+		}
+		await keyboard.pressKey(...mappedModifiers);
+		try {
+			await mouse.click(mappedButton);
+		} finally {
+			for (const modifier of mappedModifiers) {
+				heldKeys.delete(modifier);
+			}
+			if (mappedModifiers.length) {
+				await keyboard.releaseKey(...mappedModifiers.slice().reverse());
+			}
+		}
+	},
+
+	async mouseHold(button = "left", durationMs = 0) {
+		const mappedButton = toNutButton(button);
+		const numericDuration = Number(durationMs);
+		if (mappedButton === null) {
+			throw new Error(`Mouse hold does not support button "${button}".`);
+		}
+		if (!Number.isFinite(numericDuration) || numericDuration < 0) {
+			throw new Error("Mouse hold duration must be a non-negative number of milliseconds.");
+		}
+
+		await mouse.pressButton(mappedButton);
+		heldMouseButtons.add(mappedButton);
+		try {
+			await cancellableSleep(numericDuration, activeAutomationSession);
+		} finally {
+			heldMouseButtons.delete(mappedButton);
+			await mouse.releaseButton(mappedButton);
+		}
+	},
+
+	async modifiedMouseHold(button = "left", durationMs = 0, modifiers = []) {
+		const mappedButton = toNutButton(button);
+		const numericDuration = Number(durationMs);
+		if (mappedButton === null) {
+			throw new Error(`Mouse hold does not support button "${button}".`);
+		}
+		if (!Number.isFinite(numericDuration) || numericDuration < 0) {
+			throw new Error("Mouse hold duration must be a non-negative number of milliseconds.");
+		}
+
+		const mappedModifiers = modifiers.map((modifier) => toNutKey(modifier)).filter((value) => value !== null);
+		for (const modifier of mappedModifiers) {
+			heldKeys.add(modifier);
+		}
+		await keyboard.pressKey(...mappedModifiers);
+		await mouse.pressButton(mappedButton);
+		heldMouseButtons.add(mappedButton);
+		try {
+			await cancellableSleep(numericDuration, activeAutomationSession);
+		} finally {
+			heldMouseButtons.delete(mappedButton);
+			await mouse.releaseButton(mappedButton);
+			for (const modifier of mappedModifiers) {
+				heldKeys.delete(modifier);
+			}
+			if (mappedModifiers.length) {
+				await keyboard.releaseKey(...mappedModifiers.slice().reverse());
+			}
+		}
+	},
+
+	async mouseDrag(startX, startY, endX, endY, button = "left", modifiers = []) {
+		const mappedButton = toNutButton(button);
+		if (mappedButton === null) {
+			throw new Error(`Mouse drag does not support button "${button}".`);
+		}
+
+		const mappedModifiers = modifiers.map((modifier) => toNutKey(modifier)).filter((value) => value !== null);
+		for (const modifier of mappedModifiers) {
+			heldKeys.add(modifier);
+		}
+		if (mappedModifiers.length) {
+			await keyboard.pressKey(...mappedModifiers);
+		}
+		await mouse.setPosition({
+			x: Number(startX),
+			y: Number(startY)
+		});
+		await mouse.pressButton(mappedButton);
+		heldMouseButtons.add(mappedButton);
+		try {
+			ensureNotCancelled(activeAutomationSession);
+			await mouse.setPosition({
+				x: Number(endX),
+				y: Number(endY)
+			});
+			ensureNotCancelled(activeAutomationSession);
+		} finally {
+			heldMouseButtons.delete(mappedButton);
+			await mouse.releaseButton(mappedButton);
+			for (const modifier of mappedModifiers) {
+				heldKeys.delete(modifier);
+			}
+			if (mappedModifiers.length) {
+				await keyboard.releaseKey(...mappedModifiers.slice().reverse());
+			}
+		}
+	},
+
 	async scrollMouse(amount) {
 		const numericAmount = Number(amount);
 		if (!Number.isFinite(numericAmount) || numericAmount === 0) {
@@ -423,10 +869,101 @@ const automation = {
 		await keyboard.type(String(key));
 	},
 
+	async modifiedKeyTap(key, modifiers = []) {
+		const mappedKey = toNutKey(key);
+		if (mappedKey === null) {
+			throw new Error(`Modified key tap does not support unmapped key "${key}".`);
+		}
+
+		const mappedModifiers = modifiers.map((modifier) => toNutKey(modifier)).filter((value) => value !== null);
+		await keyboard.type(...mappedModifiers, mappedKey);
+	},
+
+	async keyHold(key, durationMs) {
+		const mappedKey = toNutKey(key);
+		const numericDuration = Number(durationMs);
+		if (!Number.isFinite(numericDuration) || numericDuration < 0) {
+			throw new Error("Key hold duration must be a non-negative number of milliseconds.");
+		}
+		if (mappedKey === null) {
+			throw new Error(`Key hold does not support unmapped key "${key}".`);
+		}
+
+		await keyboard.pressKey(mappedKey);
+		heldKeys.add(mappedKey);
+		try {
+			await cancellableSleep(numericDuration, activeAutomationSession);
+		} finally {
+			heldKeys.delete(mappedKey);
+			await keyboard.releaseKey(mappedKey);
+		}
+	},
+
+	async modifiedKeyHold(key, durationMs, modifiers = []) {
+		const mappedKey = toNutKey(key);
+		const numericDuration = Number(durationMs);
+		if (!Number.isFinite(numericDuration) || numericDuration < 0) {
+			throw new Error("Key hold duration must be a non-negative number of milliseconds.");
+		}
+		if (mappedKey === null) {
+			throw new Error(`Modified key hold does not support unmapped key "${key}".`);
+		}
+
+		const mappedModifiers = modifiers.map((modifier) => toNutKey(modifier)).filter((value) => value !== null);
+		const keysToHold = [...mappedModifiers, mappedKey];
+		for (const heldKey of keysToHold) {
+			heldKeys.add(heldKey);
+		}
+		await keyboard.pressKey(...keysToHold);
+		try {
+			await cancellableSleep(numericDuration, activeAutomationSession);
+		} finally {
+			for (const heldKey of keysToHold) {
+				heldKeys.delete(heldKey);
+			}
+			await keyboard.releaseKey(...keysToHold.slice().reverse());
+		}
+	},
+
 	async typeString(text) {
 		await keyboard.type(String(text));
 	}
 };
+
+function getActionModifiers(parts, startIndex = 3) {
+	const modifiers = [];
+	if (String(parts[startIndex] || "0") === "1") {
+		modifiers.push("shift");
+	}
+	if (String(parts[startIndex + 1] || "0") === "1") {
+		modifiers.push("control");
+	}
+	if (String(parts[startIndex + 2] || "0") === "1") {
+		modifiers.push("alt");
+	}
+	return modifiers;
+}
+
+function resolveMousePosition(targetBounds, relativeX, relativeY) {
+	const x = Number(relativeX);
+	const y = Number(relativeY);
+	if (!Number.isFinite(x) || !Number.isFinite(y)) {
+		throw new Error("Mouse action requires numeric X and Y coordinates.");
+	}
+
+	if (!targetBounds || !Number.isFinite(targetBounds.width) || !Number.isFinite(targetBounds.height)) {
+		throw new Error("Target window bounds are unavailable.");
+	}
+
+	if (x < 0 || y < 0 || x >= targetBounds.width || y >= targetBounds.height) {
+		throw new Error(`Mouse coordinates ${x}, ${y} are outside the bounded input area ${targetBounds.width}x${targetBounds.height}.`);
+	}
+
+	return {
+		x: targetBounds.x + x,
+		y: targetBounds.y + y
+	};
+}
 
 async function getWindowStatus() {
 	const status = await getTargetWindowStatus(config);
@@ -438,9 +975,13 @@ async function getWindowStatus() {
 	};
 }
 
-async function runAutomation(actions, contextLabel) {
+async function runAutomation(actions, contextLabel, actionArgs = []) {
+	const session = createAutomationSession(contextLabel);
 	const activation = await prepareTargetWindow(config);
 	if (!activation.ready) {
+		if (activeAutomationSession === session) {
+			activeAutomationSession = null;
+		}
 		const warning = `Automation skipped for ${contextLabel}. ${activation.reason}`;
 		if (warning !== lastWindowWarning) {
 			console.log(warning);
@@ -451,7 +992,10 @@ async function runAutomation(actions, contextLabel) {
 
 	lastWindowWarning = "";
 	try {
-		for (const action of actions) {
+		const targetBounds = activation.bounds;
+		const resolvedActions = resolveCommandActions(actions, actionArgs, targetBounds);
+		for (const action of resolvedActions) {
+			ensureNotCancelled(session);
 			if (typeof action === "function") {
 				await action();
 				continue;
@@ -460,23 +1004,89 @@ async function runAutomation(actions, contextLabel) {
 			let act = action.split("|");
 			switch (act[0]){
 			  case "mouse":
-				await automation.moveMouse(Number(act[1]), Number(act[2]));
-				if(act[3] != "none") await automation.mouseClick(act[3]);
+				{
+					const resolvedPosition = resolveMousePosition(targetBounds, act[1], act[2]);
+					await automation.moveMouse(resolvedPosition.x, resolvedPosition.y);
+					const modifiers = getActionModifiers(act, 4);
+					if(act[3] != "none") {
+						if (modifiers.length) {
+							await automation.modifiedMouseClick(act[3], modifiers);
+						} else {
+							await automation.mouseClick(act[3]);
+						}
+					}
+				}
+				break;
+			  case "mousehold":
+				{
+					const resolvedPosition = resolveMousePosition(targetBounds, act[1], act[2]);
+					await automation.moveMouse(resolvedPosition.x, resolvedPosition.y);
+					const modifiers = getActionModifiers(act, 5);
+					if (modifiers.length) {
+						await automation.modifiedMouseHold(act[3], act[4], modifiers);
+					} else {
+						await automation.mouseHold(act[3], act[4]);
+					}
+				}
+				break;
+			  case "mousedrag":
+				{
+					const startPosition = resolveMousePosition(targetBounds, act[1], act[2]);
+					const endPosition = resolveMousePosition(targetBounds, act[3], act[4]);
+					const modifiers = getActionModifiers(act, 6);
+					await automation.mouseDrag(
+						startPosition.x,
+						startPosition.y,
+						endPosition.x,
+						endPosition.y,
+						act[5],
+						modifiers
+					);
+				}
 				break;
 			  case "scroll":
 				await automation.scrollMouse(Number(act[1]));
 				break;
 			  case "keytap":
 				for(let i = 0; i < Number(act[2]); i++){
-					await automation.keyTap(act[1]);
+					ensureNotCancelled(session);
+					const modifiers = getActionModifiers(act, 3);
+					if (modifiers.length) {
+						await automation.modifiedKeyTap(act[1], modifiers);
+					} else {
+						await automation.keyTap(act[1]);
+					}
+				}
+				break;
+			  case "keyhold":
+				{
+					const modifiers = getActionModifiers(act, 3);
+					if (modifiers.length) {
+						await automation.modifiedKeyHold(act[1], act[2], modifiers);
+					} else {
+						await automation.keyHold(act[1], act[2]);
+					}
 				}
 				break;
 			}
-			await sleep(2000);
+			await cancellableSleep(2000, session);
 		}
+	} catch (error) {
+		if (error instanceof AutomationCancelledError) {
+			console.log(error.message);
+			return false;
+		}
+
+		const errorMessage = error && error.message ? error.message : String(error);
+		console.error(`Automation failed for ${contextLabel}: ${errorMessage}`);
+		return false;
 	} finally {
+		await releaseHeldInputs();
 		if (activation.switched) {
 			await restorePreviousWindow(activation.previousWindow, activation.targetWindow);
+		}
+		if (activeAutomationSession === session) {
+			activeAutomationSession = null;
 		}
 	}
 
@@ -489,6 +1099,16 @@ function updateCommandListFile(commands){
 	for (const action in commands) {
 		let actions = commands[action];
 		commandList += `  ${config.trigger}${actions.name} - ${actions.description}\n`;
+	}
+
+	const bitCommands = Object.values(commands || {})
+		.filter((details) => normalizeBitCost(details?.bitCost) > 0)
+		.sort((a, b) => normalizeBitCost(a.bitCost) - normalizeBitCost(b.bitCost));
+	if (bitCommands.length) {
+		commandList += '\nBit Rewards:\n';
+		for (const details of bitCommands) {
+			commandList += `  cheer${details.bitCost}${buildBitArgumentSuffix(details)} - ${details.description}\n`;
+		}
 	}
 
 	fs.writeFileSync(commandListPath, commandList, "utf8");

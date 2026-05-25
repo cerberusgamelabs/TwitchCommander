@@ -1,0 +1,96 @@
+{
+  "bibites": {
+    "up": {
+      "name": "up",
+      "description": "Move the map up",
+      "actions": [
+        "mouse|10|10|right",
+        "keytap|up|5"
+      ]
+    },
+    "down": {
+      "name": "down",
+      "description": "Move the map down",
+      "actions": [
+        "mouse|10|10|right",
+        "keytap|down|5"
+      ]
+    },
+    "left": {
+      "name": "left",
+      "description": "Move the map left",
+      "actions": [
+        "mouse|10|10|right",
+        "keytap|down|5"
+      ]
+    },
+    "right": {
+      "name": "right",
+      "description": "Move the map right",
+      "actions": [
+        "mouse|10|10|right",
+        "keytap|right|5"
+      ]
+    },
+    "zoomin": {
+      "name": "zoomin",
+      "description": "Zoom in on the map [Not working]",
+      "actions": [
+        "mouse|10|10|right",
+        "keytap|+|5"
+      ]
+    },
+    "zoomout": {
+      "name": "zoomout",
+      "description": "Zoom out on the map [Not working]",
+      "actions": [
+        "mouse|10|10|right",
+        "keytap|-|5"
+      ]
+    },
+    "random": {
+      "name": "random",
+      "description": "Select a random Bibite",
+      "actions": [
+        "mouse|10|10|right",
+        "keytap|r|1"
+      ]
+    },
+    "stat": {
+      "name": "stat",
+      "description": "View the Stat Panel",
+      "actions": [
+        "mouse|10|10|right",
+        "keytap|r|1",
+        "mouse|40|40|left"
+      ]
+    },
+    "gene": {
+      "name": "gene",
+      "description": "View the Gene Panel",
+      "actions": [
+        "mouse|10|10|right",
+        "keytap|r|1",
+        "mouse|110|40|left"
+      ]
+    },
+    "bio": {
+      "name": "bio",
+      "description": "View the Bio Panel",
+      "actions": [
+        "mouse|10|10|right",
+        "keytap|r|1",
+        "mouse|180|40|left"
+      ]
+    },
+    "brain": {
+      "name": "brain",
+      "description": "View the Brain Panel",
+      "actions": [
+        "mouse|10|10|right",
+        "keytap|r|1",
+        "mouse|250|40|left"
+      ]
+    }
+  }
+}

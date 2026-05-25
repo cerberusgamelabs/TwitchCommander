@@ -65,6 +65,7 @@ node_modules/**/node_modules/
 logs/
 temp/
 *.log
+dist/
 
 # Bundles and archives
 *.zip

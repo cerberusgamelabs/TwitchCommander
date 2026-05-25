@@ -1,6 +1,7 @@
 const path = require("path");
 const ActiveWindowModule = require("@paymoapp/active-window");
-const { windowManager } = require("node-window-manager");
+const { loadRuntime } = require("./runtime-loader");
+const { windowManager } = loadRuntime("node-window-manager");
 
 const ActiveWindow = ActiveWindowModule.default || ActiveWindowModule.ActiveWindow || ActiveWindowModule;
 
@@ -58,7 +59,38 @@ function getConfiguredGameWindow(config) {
 
   return {
     processName: gameSpecific.processName || configured.processName || gameDefaults.processName || gameKey,
-    windowTitle: gameSpecific.windowTitle || configured.windowTitle || gameDefaults.windowTitle || gameKey
+    windowTitle: gameSpecific.windowTitle || configured.windowTitle || gameDefaults.windowTitle || gameKey,
+    displayId: gameSpecific.displayId || configured.displayId || "",
+    displayLabel: gameSpecific.displayLabel || configured.displayLabel || "",
+    displayBounds: gameSpecific.displayBounds || configured.displayBounds || null
+  };
+}
+
+function getConfiguredInputBounds(config, targetWindow) {
+  const targetConfig = getConfiguredGameWindow(config);
+  const displayBounds = targetConfig.displayBounds;
+  if (
+    displayBounds &&
+    Number.isFinite(Number(displayBounds.width)) &&
+    Number.isFinite(Number(displayBounds.height))
+  ) {
+    return {
+      x: Number(displayBounds.x || 0),
+      y: Number(displayBounds.y || 0),
+      width: Number(displayBounds.width || 0),
+      height: Number(displayBounds.height || 0),
+      label: targetConfig.displayLabel || "Selected display"
+    };
+  }
+
+  const windowBounds = getWindowBounds(targetWindow);
+  if (!windowBounds) {
+    return null;
+  }
+
+  return {
+    ...windowBounds,
+    label: "Target window"
   };
 }
 
@@ -184,6 +216,28 @@ function findTargetWindow(targetConfig) {
     .sort((a, b) => b.score - a.score);
 
   return rankedWindows[0] || null;
+}
+
+function getWindowBounds(windowRef) {
+  if (!windowRef || !windowRef.id) {
+    return null;
+  }
+
+  try {
+    const bounds = windowRef.getBounds();
+    if (!bounds) {
+      return null;
+    }
+
+    return {
+      x: Number(bounds.x || 0),
+      y: Number(bounds.y || 0),
+      width: Number(bounds.width || 0),
+      height: Number(bounds.height || 0)
+    };
+  } catch (_) {
+    return null;
+  }
 }
 
 function findWindowBySnapshot(windowInfo) {
@@ -356,6 +410,7 @@ async function prepareTargetWindow(config) {
     switched: !alreadyActive,
     previousWindow: previousWindow && previousWindow.id ? previousWindow : previousWindowSnapshot,
     targetWindow: targetEntry.windowRef,
+    bounds: getConfiguredInputBounds(config, targetEntry.windowRef),
     reason: alreadyActive ? "Target window already focused." : `Focused ${targetConfig.processName} for automation.`
   };
 }
@@ -379,7 +434,9 @@ async function restorePreviousWindow(previousWindow, targetWindow) {
 
 module.exports = {
   getConfiguredGameWindow,
+  getConfiguredInputBounds,
   getTargetWindowStatus,
+  getWindowBounds,
   prepareTargetWindow,
   restorePreviousWindow
 };

@@ -2,13 +2,42 @@ const { app, BrowserWindow, ipcMain, shell, Menu, screen } = require("electron")
 const childProcess = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const { mouse } = require("@nut-tree/nut-js");
-const { getTargetWindowStatus } = require("../shared/window-control");
+const { appendStartupLog, getStartupLogPath } = require("../shared/startup-log");
+appendStartupLog("gui.js bootstrap start");
 
-const projectRoot = path.resolve(__dirname, "..", "..");
-const configPath = path.join(projectRoot, "data", "config.json");
-const commandsPath = path.join(projectRoot, "data", "commands.json");
-const commandListPath = path.join(projectRoot, "data", "CommandList.txt");
+const { loadRuntime } = require("../shared/runtime-loader");
+
+let mouse;
+try {
+  ({ mouse, Button } = loadRuntime("@nut-tree/nut-js"));
+  appendStartupLog("loaded @nut-tree/nut-js");
+} catch (error) {
+  appendStartupLog(`failed to load @nut-tree/nut-js: ${error && error.stack ? error.stack : error}`);
+  throw error;
+}
+
+const { ensureDataFiles, getProjectRoot } = require("../shared/data-paths");
+const {
+  buildArgumentSuffix
+} = require("../shared/command-usage");
+let getTargetWindowStatus;
+let getConfiguredGameWindow;
+let getWindowBounds;
+try {
+  ({ getTargetWindowStatus, getConfiguredGameWindow, getWindowBounds } = require("../shared/window-control"));
+  appendStartupLog("loaded window-control");
+} catch (error) {
+  appendStartupLog(`failed to load window-control: ${error && error.stack ? error.stack : error}`);
+  throw error;
+}
+
+appendStartupLog("gui.js loaded.");
+
+const projectRoot = getProjectRoot(__dirname);
+const dataRoot = ensureDataFiles(__dirname);
+const configPath = path.join(dataRoot, "config.json");
+const commandsPath = path.join(dataRoot, "commands.json");
+const commandListPath = path.join(dataRoot, "CommandList.txt");
 const rendererPath = path.join(projectRoot, "app", "renderer", "index.html");
 const botEntryPath = path.join(projectRoot, "app", "bot", "main.js");
 const TWITCH_CLIENT_ID = "chtjqkfyyjdyzxalzjnrfr5wg9c3b8";
@@ -29,6 +58,7 @@ let oauthFlowInProgress = false;
 let coordinatePickerWindows = [];
 
 app.disableHardwareAcceleration();
+appendStartupLog(`startup log path: ${getStartupLogPath()}`);
 
 process.on("warning", (warning) => {
   const isFetchExperimentalWarning =
@@ -36,8 +66,17 @@ process.on("warning", (warning) => {
     String(warning.message || "").includes("The Fetch API is an experimental feature");
 
   if (!isFetchExperimentalWarning) {
+    appendStartupLog(`warning: ${warning.name}: ${warning.message}`);
     console.warn(warning);
   }
+});
+
+process.on("uncaughtException", (error) => {
+  appendStartupLog(`uncaughtException: ${error && error.stack ? error.stack : error}`);
+});
+
+process.on("unhandledRejection", (reason) => {
+  appendStartupLog(`unhandledRejection: ${reason && reason.stack ? reason.stack : reason}`);
 });
 
 function sendLog(channel, message) {
@@ -58,12 +97,149 @@ function writeJson(filePath, value) {
 
 mouse.config.autoDelayMs = 0;
 
+function getDisplayList() {
+  return screen.getAllDisplays().map((display, index) => ({
+    id: String(display.id),
+    label: `${display.label || getDisplayLabel(display, index)} (${display.bounds.width}x${display.bounds.height} @ ${display.bounds.x}, ${display.bounds.y})`,
+    bounds: {
+      x: Number(display.bounds.x || 0),
+      y: Number(display.bounds.y || 0),
+      width: Number(display.bounds.width || 0),
+      height: Number(display.bounds.height || 0)
+    }
+  }));
+}
+
+function getConfiguredDisplayBounds(config) {
+  const gameWindow = getConfiguredGameWindow(config);
+  if (
+    gameWindow.displayBounds &&
+    Number.isFinite(Number(gameWindow.displayBounds.width)) &&
+    Number.isFinite(Number(gameWindow.displayBounds.height))
+  ) {
+    return {
+      x: Number(gameWindow.displayBounds.x || 0),
+      y: Number(gameWindow.displayBounds.y || 0),
+      width: Number(gameWindow.displayBounds.width || 0),
+      height: Number(gameWindow.displayBounds.height || 0)
+    };
+  }
+
+  return null;
+}
+
+function toNutButton(button) {
+  switch (String(button || "left").toLowerCase()) {
+    case "left":
+      return Button.LEFT;
+    case "middle":
+      return Button.MIDDLE;
+    case "right":
+      return Button.RIGHT;
+    default:
+      return null;
+  }
+}
+
+function findTargetWindowForConfig(config) {
+  const targetConfig = getConfiguredGameWindow(config);
+  const { windowManager } = loadRuntime("node-window-manager");
+  const matches = windowManager.getWindows().filter((windowRef) => {
+    try {
+      if (!windowRef.isVisible() || !windowRef.isWindow()) {
+        return false;
+      }
+
+      const processName = path.basename(windowRef.path || "").replace(/\.exe$/i, "").toLowerCase();
+      const wantedProcess = String(targetConfig.processName || "").replace(/\.exe$/i, "").toLowerCase();
+      const wantedTitle = String(targetConfig.windowTitle || "").trim().toLowerCase();
+      const title = String(windowRef.getTitle() || "").trim().toLowerCase();
+      const processMatches = !wantedProcess || processName === wantedProcess;
+      const titleMatches = !wantedTitle || title.includes(wantedTitle);
+      return processMatches && titleMatches;
+    } catch (_) {
+      return false;
+    }
+  });
+
+  if (!matches.length) {
+    throw new Error(`${targetConfig.processName} is not open in a visible window.`);
+  }
+
+  return matches[0];
+}
+
+function getConfigForGame(gameKey) {
+  const config = readJson(configPath);
+  config.gameWindows = config.gameWindows || {};
+  if (gameKey) {
+    config.game = gameKey;
+    config.gameWindow = config.gameWindows[gameKey] || config.gameWindow || {};
+  }
+  return config;
+}
+
+function screenToRelativeGamePosition(gameKey, screenX, screenY) {
+  const config = getConfigForGame(gameKey);
+  const bounds = getConfiguredDisplayBounds(config) || getWindowBounds(findTargetWindowForConfig(config));
+  if (!bounds || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) {
+    throw new Error("No bounded input area is configured for this game.");
+  }
+
+  const relativeX = Number(screenX) - bounds.x;
+  const relativeY = Number(screenY) - bounds.y;
+  if (relativeX < 0 || relativeY < 0 || relativeX >= bounds.width || relativeY >= bounds.height) {
+    throw new Error(`Point ${screenX}, ${screenY} is outside the bounded input area ${bounds.width}x${bounds.height}.`);
+  }
+
+  return {
+    x: relativeX,
+    y: relativeY,
+    bounds
+  };
+}
+
+function relativeToScreenGamePosition(gameKey, relativeX, relativeY) {
+  const config = getConfigForGame(gameKey);
+  const bounds = getConfiguredDisplayBounds(config) || getWindowBounds(findTargetWindowForConfig(config));
+  const x = Number(relativeX);
+  const y = Number(relativeY);
+
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new Error("Mouse test requires valid X and Y coordinates.");
+  }
+
+  if (!bounds || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) {
+    throw new Error("No bounded input area is configured for this game.");
+  }
+
+  if (x < 0 || y < 0 || x >= bounds.width || y >= bounds.height) {
+    throw new Error(`Mouse coordinates ${x}, ${y} are outside the bounded input area ${bounds.width}x${bounds.height}.`);
+  }
+
+  return {
+    x: bounds.x + x,
+    y: bounds.y + y,
+    bounds
+  };
+}
+
 function buildCommandList(config, commands) {
   const gameCommands = commands[config.game] || {};
   let commandList = "Commands:\n";
   for (const action in gameCommands) {
     const details = gameCommands[action];
     commandList += `  ${config.trigger}${details.name} - ${details.description}\n`;
+  }
+
+  const bitCommands = Object.values(gameCommands)
+    .filter((details) => Number.isFinite(Number(details?.bitCost)) && Number(details.bitCost) > 0)
+    .sort((a, b) => Number(a.bitCost) - Number(b.bitCost));
+  if (bitCommands.length) {
+    commandList += "\nBit Rewards:\n";
+    for (const details of bitCommands) {
+      commandList += `  cheer${Math.floor(Number(details.bitCost))}${buildArgumentSuffix(details)} - ${details.description}\n`;
+    }
   }
   return commandList;
 }
@@ -171,6 +347,7 @@ async function pollForDeviceToken(clientId, deviceData) {
 }
 
 function createWindow() {
+  appendStartupLog(`createWindow called with rendererPath=${rendererPath}`);
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 900,
@@ -182,7 +359,24 @@ function createWindow() {
     }
   });
 
+  mainWindow.webContents.on("did-fail-load", (_, errorCode, errorDescription, validatedURL) => {
+    appendStartupLog(`did-fail-load: code=${errorCode} description=${errorDescription} url=${validatedURL}`);
+  });
+
+  mainWindow.webContents.on("did-finish-load", () => {
+    appendStartupLog("did-finish-load");
+  });
+
+  mainWindow.on("ready-to-show", () => {
+    appendStartupLog("ready-to-show");
+  });
+
+  mainWindow.on("closed", () => {
+    appendStartupLog("main window closed");
+  });
+
   mainWindow.loadFile(rendererPath);
+  appendStartupLog("mainWindow.loadFile invoked");
 }
 
 function closeCoordinatePickerWindow() {
@@ -282,6 +476,7 @@ function buildCoordinatePickerHtml(label) {
 }
 
 app.whenReady().then(() => {
+  appendStartupLog("app.whenReady resolved");
   Menu.setApplicationMenu(null);
   createWindow();
 
@@ -407,16 +602,22 @@ ipcMain.handle("get-process-list", async () => {
   }
 });
 
+ipcMain.handle("get-display-list", async () => {
+  return getDisplayList();
+});
+
 ipcMain.handle("test-mouse-action", async (_event, payload) => {
-  const x = Number(payload?.x);
-  const y = Number(payload?.y);
-
-  if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    throw new Error("Mouse test requires valid X and Y coordinates.");
+  const position = relativeToScreenGamePosition(payload?.gameKey, payload?.x, payload?.y);
+  await mouse.setPosition({ x: position.x, y: position.y });
+  const mappedButton = toNutButton(payload?.button);
+  if (mappedButton) {
+    await mouse.click(mappedButton);
   }
-
-  await mouse.setPosition({ x, y });
   return { ok: true };
+});
+
+ipcMain.handle("screen-to-game-coordinates", async (_event, payload) => {
+  return screenToRelativeGamePosition(payload?.gameKey, payload?.x, payload?.y);
 });
 
 ipcMain.handle("save-app-state", (event, payload) => {
@@ -517,7 +718,9 @@ ipcMain.on("start-node-process", (event) => {
     cwd: projectRoot,
     env: {
       ...process.env,
-      ELECTRON_RUN_AS_NODE: "1"
+      ELECTRON_RUN_AS_NODE: "1",
+      TWITCHCOMMANDER_DATA_DIR: dataRoot,
+      TWITCHCOMMANDER_PACKAGED: app.isPackaged ? "1" : "0"
     }
   });
   startedAt = Date.now();
